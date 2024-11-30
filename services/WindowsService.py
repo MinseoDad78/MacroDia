@@ -1,23 +1,26 @@
 import sys
-import win32gui
+import win32gui, win32con
 import win32process
 import psutil
 import pyautogui
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QListWidget, QMessageBox, QInputDialog
 )
+import win32gui
+import win32con
+import win32process
+import psutil
 
 
-class DiabloWindowManager:
-    """디아블로 창 관리 클래스"""
+class WindowsService:
+    """Windows 창 관리 서비스 클래스"""
 
     @staticmethod
     def find_windows_by_process_name(process_name):
         """주어진 프로세스 이름과 연결된 윈도우 핸들 검색"""
         windows = []
 
-        def enum_windows_callback(hwnd, process_name):
-            """윈도우 핸들을 열거하며 프로세스 이름으로 필터링"""
+        def enum_windows_callback(hwnd, _):
             if win32gui.IsWindowVisible(hwnd):
                 _, pid = win32process.GetWindowThreadProcessId(hwnd)
                 try:
@@ -27,7 +30,7 @@ class DiabloWindowManager:
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     pass
 
-        win32gui.EnumWindows(enum_windows_callback, process_name)
+        win32gui.EnumWindows(enum_windows_callback, None)
         return windows
 
     @staticmethod
@@ -36,12 +39,14 @@ class DiabloWindowManager:
         win32gui.SetWindowPos(hwnd, 0, x, y, 0, 0, 1)
 
     @staticmethod
+    def minimize_window(hwnd):
+        """윈도우 창 최소화"""
+        win32gui.ShowWindow(hwnd, win32con.SW_MINIMIZE)
+
+    @staticmethod
     def get_window_info(hwnd):
-        """
-        주어진 윈도우 핸들의 위치 및 크기 정보를 반환
-        pyautogui를 위한 좌표와 크기 반환
-        """
-        rect = win32gui.GetWindowRect(hwnd)  # 창의 좌표 정보 가져오기
+        """주어진 윈도우 핸들의 위치 및 크기 정보를 반환"""
+        rect = win32gui.GetWindowRect(hwnd)
         x, y, right, bottom = rect
         width = right - x
         height = bottom - y
@@ -54,12 +59,33 @@ class DiabloWindowManager:
             "height": height
         }
 
+    @staticmethod
+    def set_role(hwnd, role):
+        """
+        주어진 창 핸들에 역할을 설정 (Master/Slave/None)
+        Master: 모니터 1 (좌상단)으로 이동
+        Slave: 모니터 2 (우상단)으로 이동
+        None: 창 최소화
+        """
+        if role == "Master":
+            WindowsService.move_window(hwnd, 0, 0)  # 모니터 1 좌상단
+            return "Master 역할로 설정하고 모니터 1에 배치했습니다."
+        elif role == "Slave":
+            WindowsService.move_window(hwnd, 1920, 0)  # 모니터 2 우상단
+            return "Slave 역할로 설정하고 모니터 2에 배치했습니다."
+        elif role == "None":
+            WindowsService.minimize_window(hwnd)  # 창 최소화
+            return "창을 최소화했습니다."
+        else:
+            raise ValueError(f"유효하지 않은 역할: {role}")
+
 
 class DiabloManagerApp(QWidget):
     """PyQt5 UI를 사용한 디아블로 창 관리 애플리케이션"""
 
     def __init__(self):
         super().__init__()
+        self.window_roles = {}  # 각 창의 역할을 저장 (hwnd: role)
         self.init_ui()
 
     def init_ui(self):
@@ -80,7 +106,7 @@ class DiabloManagerApp(QWidget):
         # 역할 선택 콤보박스
         role_layout = QHBoxLayout()
         self.role_selection = QComboBox()
-        self.role_selection.addItems(["Master", "Slave","None"])
+        self.role_selection.addItems(["Master", "Slave", "None"])
         role_layout.addWidget(QLabel("역할 선택:"))
         role_layout.addWidget(self.role_selection)
         layout.addLayout(role_layout)
@@ -115,14 +141,15 @@ class DiabloManagerApp(QWidget):
         """디아블로 2 창 탐지 (프로세스 이름 기반)"""
         self.window_list_widget.clear()
         process_name = "D2R.exe"  # 디아블로 2의 실행 파일 이름
-        windows = DiabloWindowManager.find_windows_by_process_name(process_name)
+        windows = WindowsService.find_windows_by_process_name(process_name)
 
         if not windows:
             QMessageBox.warning(self, "경고", "디아블로 2 창을 찾을 수 없습니다.")
             return
 
         for hwnd, title in windows:
-            self.window_list_widget.addItem(f"{title} (HWND: {hwnd})")
+            role = self.window_roles.get(hwnd, "None")  # 역할 정보 가져오기 (기본값: None)
+            self.window_list_widget.addItem(f"{title} (HWND: {hwnd}) [Role: {role}]")
 
         QMessageBox.information(self, "창 탐지 완료", f"{len(windows)}개의 디아블로 2 창을 탐지했습니다.")
 
@@ -134,16 +161,17 @@ class DiabloManagerApp(QWidget):
             return
 
         selected_text = selected_items[0].text()
-        hwnd = int(selected_text.split("(HWND: ")[-1].rstrip(")"))  # HWND 추출
+        hwnd = int(selected_text.split("(HWND: ")[-1].split(")")[0])  # HWND 추출
         selected_role = self.role_selection.currentText()
 
-        # 역할에 따라 창 배치
-        if selected_role == "Master":
-            DiabloWindowManager.move_window(hwnd, 0, 0)  # 모니터 1 (좌상단)
-            QMessageBox.information(self, "Master 설정 완료", f"창 (HWND: {hwnd})를 Master로 설정하고 모니터 1에 배치했습니다.")
-        elif selected_role == "Slave":
-            DiabloWindowManager.move_window(hwnd, 1920, 0)  # 모니터 2 (우상단)
-            QMessageBox.information(self, "Slave 설정 완료", f"창 (HWND: {hwnd})를 Slave로 설정하고 모니터 2에 배치했습니다.")
+        # 역할에 따라 창 배치/최소화
+        try:
+            message = WindowsService.set_role(hwnd, selected_role)
+            self.window_roles[hwnd] = selected_role  # 역할 업데이트
+            self.detect_windows()  # 창 목록 갱신
+            QMessageBox.information(self, f"{selected_role} 설정 완료", f"창 (HWND: {hwnd}) {message}")
+        except ValueError as e:
+            QMessageBox.warning(self, "오류", str(e))
 
     def print_window_info(self):
         """선택된 창의 정보를 출력"""
@@ -153,21 +181,11 @@ class DiabloManagerApp(QWidget):
             return
 
         selected_text = selected_items[0].text()
-        hwnd = int(selected_text.split("(HWND: ")[-1].rstrip(")"))  # HWND 추출
+        hwnd = int(selected_text.split("(HWND: ")[-1].split(")")[0])  # HWND 추출
 
-        info = DiabloWindowManager.get_window_info(hwnd)
+        info = WindowsService.get_window_info(hwnd)
         QMessageBox.information(
             self,
             "창 정보",
             f"HWND: {info['hwnd']}\nX: {info['x']}\nY: {info['y']}\nWidth: {info['width']}\nHeight: {info['height']}"
         )
-
-        # 예제: pyautogui로 클릭할 좌표 출력
-        print(f"PyAutoGUI 좌표: Center X = {info['x'] + info['width'] // 2}, Center Y = {info['y'] + info['height'] // 2}")
-
-
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    manager_app = DiabloManagerApp()
-    manager_app.show()
-    sys.exit(app.exec_())

@@ -1,4 +1,4 @@
-from services.SelectWindows import QApplication, DiabloManagerApp
+from services.WindowsService import QApplication, DiabloManagerApp
 import sys
 from services.UACAdmin import AdminProcess
 
