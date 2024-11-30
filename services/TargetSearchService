@@ -1,0 +1,110 @@
+import cv2
+import numpy as np
+import win32gui
+import win32ui
+import win32con
+import pyautogui
+
+def capture_window(hwnd):
+    """특정 창의 화면을 캡처"""
+    rect = win32gui.GetWindowRect(hwnd)
+    width = rect[2] - rect[0]
+    height = rect[3] - rect[1]
+
+    hwndDC = win32gui.GetWindowDC(hwnd)
+    mfcDC = win32ui.CreateDCFromHandle(hwndDC)
+    saveDC = mfcDC.CreateCompatibleDC()
+    saveBitmap = win32ui.CreateBitmap()
+    saveBitmap.CreateCompatibleBitmap(mfcDC, width, height)
+    saveDC.SelectObject(saveBitmap)
+    saveDC.BitBlt((0, 0), (width, height), mfcDC, (0, 0), win32con.SRCCOPY)
+
+    bmpinfo = saveBitmap.GetInfo()
+    bmpstr = saveBitmap.GetBitmapBits(True)
+
+    img = np.frombuffer(bmpstr, dtype="uint8")
+    img.shape = (height, width, 4)
+
+    win32gui.DeleteObject(saveBitmap.GetHandle())
+    saveDC.DeleteDC()
+    mfcDC.DeleteDC()
+    win32gui.ReleaseDC(hwnd, hwndDC)
+
+    return cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+
+def match_icon_in_window(hwnd, template_path):
+    """특정 창에서 템플릿 이미지를 검색"""
+    # 창 캡처
+    captured_image = capture_window(hwnd)
+
+    # 템플릿 이미지 로드
+    template = cv2.imread(template_path, cv2.IMREAD_COLOR)
+    if template is None:
+        raise FileNotFoundError(f"템플릿 파일을 찾을 수 없습니다: {template_path}")
+
+    # SIFT를 이용해 특징점 추출
+    sift = cv2.SIFT_create()
+    keypoints1, descriptors1 = sift.detectAndCompute(template, None)
+    keypoints2, descriptors2 = sift.detectAndCompute(captured_image, None)
+
+    # 매칭 알고리즘 (Brute Force)
+    bf = cv2.BFMatcher(cv2.NORM_L2, crossCheck=True)
+    matches = bf.match(descriptors1, descriptors2)
+    matches = sorted(matches, key=lambda x: x.distance)
+
+    # 매칭 결과가 충분하지 않은 경우
+    if len(matches) < 10:
+        print("매칭된 특징점이 부족합니다.")
+        return None
+
+    # 템플릿 위치 계산
+    src_pts = np.float32([keypoints1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
+    dst_pts = np.float32([keypoints2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
+    matrix, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0)
+
+    if matrix is None:
+        print("매칭된 영역을 찾을 수 없습니다.")
+        return None
+
+    # 템플릿의 위치 계산
+    h, w = template.shape[:2]
+    pts = np.float32([[0, 0], [0, h - 1], [w - 1, h - 1], [w - 1, 0]]).reshape(-1, 1, 2)
+    dst = cv2.perspectiveTransform(pts, matrix)
+
+    # 중심 좌표 계산
+    center_x = int(np.mean(dst[:, 0, 0]))
+    center_y = int(np.mean(dst[:, 0, 1]))
+
+    # 디버그용: 매칭 결과 표시
+    captured_with_matches = cv2.polylines(
+        captured_image, [np.int32(dst)], isClosed=True, color=(0, 255, 0), thickness=3
+    )
+    cv2.imshow("Matched Icon", captured_with_matches)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+    return (center_x, center_y)
+
+if __name__ == "__main__":
+    # 대상 창 제목
+    window_title = "Diablo II: Resurrected"  # 실제 게임 창 제목을 입력
+    hwnd = win32gui.FindWindow(None, window_title)
+
+    if hwnd == 0:
+        print(f"'{window_title}' 창을 찾을 수 없습니다.")
+        exit()
+
+    # 템플릿 이미지 경로
+    template_path = "template.png"
+
+    # 템플릿 매칭 수행
+    try:
+        icon_position = match_icon_in_window(hwnd, template_path)
+        if icon_position:
+            print(f"아이콘 위치: {icon_position}")
+            # pyautogui를 사용해 마우스를 이동
+            pyautogui.moveTo(icon_position[0], icon_position[1])
+        else:
+            print("아이콘을 찾을 수 없습니다.")
+    except Exception as e:
+        print(f"오류: {e}")
