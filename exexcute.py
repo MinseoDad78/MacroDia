@@ -17,5 +17,6 @@ def main():
         manager_app.show()
         sys.exit(app.exec_())  # PyQt5 이벤트 루프 실행
 
+
 if __name__ == "__main__":
     main()
